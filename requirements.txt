@@ -1,0 +1,45 @@
+# Billboard Ad Replacement — Python dependencies
+# Target: Python 3.13 (Windows/Linux/macOS)
+
+# --- PyTorch (install this FIRST, separately, with the correct CUDA build) ---
+# Do NOT just pip install torch from this file — the default PyPI wheel on
+# Windows/macOS is CPU-only. Instead run the command for your CUDA version
+# from: https://pytorch.org/get-started/locally/
+#
+# As of mid-2026, PyTorch's officially supported CUDA indexes are cu121,
+# cu124, cu126, cu128 (check the link above for the current list — it
+# changes as new CUDA toolkits are supported). Match it to what
+# `nvidia-smi` reports for your driver, picking the closest supported
+# version at or below it. Example for CUDA 12.4:
+#
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# Then verify GPU is detected:
+#   python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+#
+# torch/torchvision are intentionally NOT listed below — installing them
+# from this file via plain PyPI would silently give you the CPU build.
+
+# --- Core detection framework ---
+# ultralytics itself requires numpy>=1.23 with no upper bound (i.e. it
+# expects and supports numpy 2.x) as of current releases.
+ultralytics>=8.3.0
+
+# --- Image processing / compositing ---
+# numpy: no upper-bound pin here on purpose. numpy 1.26.x never published
+# cp313 wheels (Python 3.13 support only landed in the numpy 2.x line), so
+# pinning <2.0 makes installation on Python 3.13 impossible. Current
+# ultralytics/opencv-python both support numpy 2.x, so let pip pick the
+# latest compatible release.
+numpy>=1.26.0
+# 4.13.0.90 has a known bad build flagged by ultralytics' own compatibility
+# pins — excluded here for safety, any other recent 4.x is fine.
+opencv-python>=4.9.0,!=4.13.0.90
+matplotlib>=3.8.0
+
+# --- Dataset config parsing ---
+pyyaml>=6.0
+
+# --- Testing UI ---
+streamlit>=1.35.0
+pillow>=10.0.0
