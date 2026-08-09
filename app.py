@@ -1,5 +1,6 @@
 import base64
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -9,83 +10,114 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent
 MODEL_PATH = PROJECT_ROOT / "models" / "billboard_best.pt"
 STATIC_DIR = PROJECT_ROOT / "static"
 
-app = FastAPI(title="Billboard Ad Replacement")
+# ---------------------------------------------------------------------------
+# YOLO config dir — Render's home dir is read-only, force /tmp
+# ---------------------------------------------------------------------------
+os.environ.setdefault("YOLO_CONFIG_DIR", "/tmp/Ultralytics")
 
-# Model is loaded lazily on first request / on startup so the process can
-# still boot (and serve /api/health) even if the weights aren't present yet.
+# ---------------------------------------------------------------------------
+# Global model handle (lazy-loaded)
+# ---------------------------------------------------------------------------
 _model = None
 
 
 # ---------------------------------------------------------------------------
-# Model loading
+# Model helpers
 # ---------------------------------------------------------------------------
 def download_model_if_needed() -> None:
-    """
-    If models/billboard_best.pt isn't in the repo (common — weight files are
-    often too large / awkward to commit to git) and a MODEL_URL env var is
-    set, download it on startup. Otherwise this is a no-op.
-    """
+    """Download model weights from MODEL_URL env var if not present on disk."""
     if MODEL_PATH.exists():
         return
     model_url = os.environ.get("MODEL_URL")
     if not model_url:
+        print("No MODEL_URL set and no model file found — skipping download.")
         return
 
-    print(f"MODEL_URL set — downloading model weights to {MODEL_PATH} ...")
+    print(f"Downloading model weights from MODEL_URL → {MODEL_PATH} …")
     import requests
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    resp = requests.get(model_url, stream=True, timeout=120)
+    resp = requests.get(model_url, stream=True, timeout=300)
     resp.raise_for_status()
     with open(MODEL_PATH, "wb") as f:
         for chunk in resp.iter_content(chunk_size=1024 * 1024):
             f.write(chunk)
-    print("Model download complete.")
+    print("Model download complete ✓")
 
 
 def get_model():
     global _model
-    if _model is None:
-        if not MODEL_PATH.exists():
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    f"No trained model found at {MODEL_PATH}. Run the training "
-                    "pipeline (1_prepare_dataset.py -> 2_train_model.py) and "
-                    "commit/upload models/billboard_best.pt, or set MODEL_URL."
-                ),
-            )
-        from ultralytics import YOLO
+    if _model is not None:
+        return _model
 
-        print(f"Loading model from {MODEL_PATH} ...")
+    if not MODEL_PATH.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"No trained model found at {MODEL_PATH}. "
+                "Upload models/billboard_best.pt or set MODEL_URL in Render env vars."
+            ),
+        )
+
+    from ultralytics import YOLO
+
+    print(f"Loading YOLO model from {MODEL_PATH} …")
+    try:
+        _model = YOLO(str(MODEL_PATH))
+    except Exception as e:
+        # PyTorch 2.6+ weights_only security change workaround
+        print(f"Standard load failed ({e}); retrying with safe_globals …")
+        import torch
         try:
-            _model = YOLO(str(MODEL_PATH))
-        except Exception as e:
-            # Handle PyTorch 2.6+ weights_only security issue
-            print(f"Standard load failed: {e}")
-            print("Attempting load with safe_globals workaround...")
-            import torch
             from ultralytics.nn.tasks import DetectionModel
-            
             torch.serialization.add_safe_globals([DetectionModel])
-            _model = YOLO(str(MODEL_PATH))
+        except ImportError:
+            pass
+        _model = YOLO(str(MODEL_PATH))
+
+    print("Model loaded ✓")
     return _model
 
 
-@app.on_event("startup")
-def on_startup():
+# ---------------------------------------------------------------------------
+# Lifespan (replaces deprecated @app.on_event)
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Startup: only do fast, non-blocking work so uvicorn binds the port
+    immediately (Render times out if the port isn't open within ~5 s).
+
+    Model loading is intentionally deferred to the first /api/detect call —
+    it can take 10-30 s on a cold CPU instance and would cause Render's port
+    scanner to give up before the server is ready.
+    """
+    # Only download weights — this is a no-op if the file already exists
+    # and MODEL_URL isn't set, so it returns instantly in that case.
+    print("Startup: checking for model weights …")
     download_model_if_needed()
-    # Don't hard-fail startup if weights are missing — /api/health will
-    # report it, and the frontend shows a clear message instead of a 500.
     if MODEL_PATH.exists():
-        try:
-            get_model()
-        except Exception as e:  # pragma: no cover
-            print(f"Warning: model failed to load at startup: {e}")
+        print(f"Model file found at {MODEL_PATH} — will load on first request.")
+    else:
+        print(
+            "Warning: no model file found. "
+            "Set MODEL_URL env var or commit models/billboard_best.pt."
+        )
+    print("Startup complete — server ready.")
+    yield  # Server is live and accepting requests here
+
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+app = FastAPI(title="Billboard Ad Replacement", lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +140,7 @@ def bgr_to_data_url(img_bgr: np.ndarray) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Detection / quad-fitting / compositing (ported from test.py)
+# Detection / quad-fitting / compositing
 # ---------------------------------------------------------------------------
 def detect_billboards(model, image_bgr: np.ndarray, conf_threshold: float):
     results = model.predict(image_bgr, conf=conf_threshold, verbose=False)
@@ -196,11 +228,13 @@ def warp_and_composite(scene_bgr, ad_bgr, quad, blend_edge: bool = True):
     h_scene, w_scene = scene_bgr.shape[:2]
     h_ad, w_ad = ad_bgr.shape[:2]
 
-    src_pts = np.array([[0, 0], [w_ad, 0], [w_ad, h_ad], [0, h_ad]], dtype=np.float32)
-    homography_matrix = cv2.getPerspectiveTransform(src_pts, quad)
+    src_pts = np.array(
+        [[0, 0], [w_ad, 0], [w_ad, h_ad], [0, h_ad]], dtype=np.float32
+    )
+    H = cv2.getPerspectiveTransform(src_pts, quad)
     warped_ad = cv2.warpPerspective(
-        ad_bgr, homography_matrix, (w_scene, h_scene),
-        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT
+        ad_bgr, H, (w_scene, h_scene),
+        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
     )
 
     mask = np.zeros((h_scene, w_scene), dtype=np.uint8)
@@ -209,17 +243,23 @@ def warp_and_composite(scene_bgr, ad_bgr, quad, blend_edge: bool = True):
         mask = cv2.GaussianBlur(mask, (7, 7), 0)
 
     mask_3ch = cv2.merge([mask, mask, mask]).astype(np.float32) / 255.0
-    composite = (warped_ad.astype(np.float32) * mask_3ch
-                 + scene_bgr.astype(np.float32) * (1 - mask_3ch))
+    composite = (
+        warped_ad.astype(np.float32) * mask_3ch
+        + scene_bgr.astype(np.float32) * (1 - mask_3ch)
+    )
     return composite.astype(np.uint8)
 
 
 # ---------------------------------------------------------------------------
-# API routes
+# API routes — register BEFORE mounting StaticFiles
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "model_loaded": MODEL_PATH.exists()}
+    return {
+        "status": "ok",
+        "model_loaded": _model is not None,
+        "model_file_present": MODEL_PATH.exists(),
+    }
 
 
 @app.post("/api/detect")
@@ -233,13 +273,19 @@ async def api_detect(scene: UploadFile = File(...), conf: float = Form(0.25)):
     preview = scene_bgr.copy()
     for i, (x1, y1, x2, y2, c) in enumerate(boxes):
         cv2.rectangle(preview, (x1, y1), (x2, y2), (0, 255, 0), 3)
-        cv2.putText(preview, f"#{i+1} {c:.2f}", (x1, max(0, y1 - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        cv2.putText(
+            preview, f"#{i + 1} {c:.2f}", (x1, max(0, y1 - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2,
+        )
 
     h, w = scene_bgr.shape[:2]
     return JSONResponse({
         "boxes": [
-            {"index": i, "x1": b[0], "y1": b[1], "x2": b[2], "y2": b[3], "confidence": b[4]}
+            {
+                "index": i,
+                "x1": b[0], "y1": b[1], "x2": b[2], "y2": b[3],
+                "confidence": b[4],
+            }
             for i, b in enumerate(boxes)
         ],
         "preview": bgr_to_data_url(preview),
@@ -275,7 +321,10 @@ async def api_composite(
 
     preview = scene_bgr.copy()
     cv2.rectangle(preview, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-    cv2.polylines(preview, [quad.astype(np.int32)], isClosed=True, color=(0, 140, 255), thickness=3)
+    cv2.polylines(
+        preview, [quad.astype(np.int32)],
+        isClosed=True, color=(0, 140, 255), thickness=3,
+    )
 
     return JSONResponse({
         "result": bgr_to_data_url(result_bgr),
@@ -285,11 +334,20 @@ async def api_composite(
 
 
 # ---------------------------------------------------------------------------
-# Static frontend
+# Serve index.html at root — must come BEFORE the static mount
 # ---------------------------------------------------------------------------
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    index_path = STATIC_DIR / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="index.html not found in static/")
+    return FileResponse(str(index_path))
 
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# ---------------------------------------------------------------------------
+# Static assets — mount LAST so API routes take priority
+# ---------------------------------------------------------------------------
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+else:
+    print(f"Warning: static dir not found at {STATIC_DIR}")
