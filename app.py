@@ -1,24 +1,3 @@
-"""
-app.py
-------
-FastAPI backend for the Billboard Ad Replacement tool.
-
-Replaces the old Streamlit app (test.py / 4_test_replace.py) with a plain
-HTTP API + static HTML/JS frontend, so this can be deployed on Render as a
-standard Python web service instead of Streamlit Cloud.
-
-USAGE (local):
-    uvicorn app:app --reload
-
-DEPLOY (Render):
-    Build command : pip install -r requirements.txt
-    Start command : uvicorn app:app --host 0.0.0.0 --port $PORT
-
-Requires: models/billboard_best.pt to exist (produced by 2_train_model.py),
-or a MODEL_URL environment variable pointing to a downloadable .pt file
-(see download_model_if_needed() below).
-"""
-
 import base64
 import os
 from pathlib import Path
@@ -83,7 +62,17 @@ def get_model():
         from ultralytics import YOLO
 
         print(f"Loading model from {MODEL_PATH} ...")
-        _model = YOLO(str(MODEL_PATH))
+        try:
+            _model = YOLO(str(MODEL_PATH))
+        except Exception as e:
+            # Handle PyTorch 2.6+ weights_only security issue
+            print(f"Standard load failed: {e}")
+            print("Attempting load with safe_globals workaround...")
+            import torch
+            from ultralytics.nn.tasks import DetectionModel
+            
+            torch.serialization.add_safe_globals([DetectionModel])
+            _model = YOLO(str(MODEL_PATH))
     return _model
 
 
