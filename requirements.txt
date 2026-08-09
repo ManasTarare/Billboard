@@ -1,30 +1,7 @@
-# Billboard Ad Replacement — web service dependencies (FastAPI on Render)
-#
-# This file is for the deployed API (app.py), NOT the training pipeline.
-# For training (1_prepare_dataset.py / 2_train_model.py / 3_evaluate_model.py)
-# on your own GPU machine, use requirements-training.txt instead — training
-# needs a CUDA build of torch, which is different from the CPU build below.
-
-# --- PyTorch, CPU build (Render's free/standard plans have no GPU) ---
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
-torchvision
-
-# --- Web framework ---
-fastapi>=0.110.0
-uvicorn[standard]>=0.29.0
-python-multipart>=0.0.9
-requests>=2.31.0
-
-# --- Detection framework ---
-ultralytics>=8.3.0
-
-# --- Image processing ---
-# opencv-python-headless: no GUI/display deps, required for servers (the
-# regular opencv-python package pulls in libGL and fails to import on Render).
-numpy>=1.26.0
-opencv-python-headless>=4.9.0,!=4.13.0.90
-pillow>=10.0.0
-
-# --- Dataset config parsing (data.yaml only needed if you keep training-related code around) ---
-pyyaml>=6.0
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+opencv-python==4.8.1.78
+numpy==1.24.3
+requests==2.31.0
+torch==2.1.1
+ultralytics==8.0.211
