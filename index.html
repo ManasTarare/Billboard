@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Billboard Ad Replacement — Proof Sheet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<div class="ticket">
+
+  <header class="ticket__head">
+    <div class="ticket__brand">
+      <span class="ticket__wordmark">SPACE&nbsp;SWAP</span>
+      <span class="ticket__sub">outdoor media proofing tool</span>
+    </div>
+    <div class="ticket__meta">
+      <div><span class="k">job&nbsp;no.</span><span class="v" id="jobNo">—</span></div>
+      <div><span class="k">status</span><span class="v" id="jobStatus">awaiting input</span></div>
+    </div>
+  </header>
+
+  <div class="ticket__body">
+
+    <!-- STEP 1: uploads -->
+    <section class="panel">
+      <h2 class="panel__title"><span class="eyebrow">01</span> load media</h2>
+
+      <div class="upload-row">
+        <div class="frame" id="sceneFrame">
+          <div class="frame__corners"></div>
+          <label class="frame__drop" for="sceneInput">
+            <span class="frame__label">scene</span>
+            <span class="frame__hint">click to choose a photo containing a billboard</span>
+          </label>
+          <img id="scenePreview" class="frame__img" alt="" hidden />
+          <input type="file" id="sceneInput" accept="image/png,image/jpeg" hidden />
+        </div>
+
+        <div class="frame" id="adFrame">
+          <div class="frame__corners"></div>
+          <label class="frame__drop" for="adInput">
+            <span class="frame__label">creative</span>
+            <span class="frame__hint">click to choose the ad image to insert</span>
+          </label>
+          <img id="adPreview" class="frame__img" alt="" hidden />
+          <input type="file" id="adInput" accept="image/png,image/jpeg" hidden />
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 2: spec sheet -->
+    <section class="panel">
+      <h2 class="panel__title"><span class="eyebrow">02</span> specify</h2>
+
+      <div class="spec-grid">
+        <div class="spec">
+          <label for="confSlider">detection confidence <span id="confVal" class="mono-val">0.25</span></label>
+          <input type="range" id="confSlider" min="0.05" max="0.95" step="0.05" value="0.25" />
+        </div>
+
+        <div class="spec spec--toggle">
+          <label>
+            <input type="checkbox" id="fitShape" checked />
+            <span>fit ad to true billboard shape</span>
+          </label>
+          <p class="spec__note">detects the panel's actual corners for angle/tilt. falls back to a rectangle if no clean edge is found. toggling this updates the proof instantly.</p>
+        </div>
+
+        <div class="spec spec--toggle">
+          <label>
+            <input type="checkbox" id="blendEdges" checked />
+            <span>feather composite edges</span>
+          </label>
+          <p class="spec__note">softens the seam instead of a hard paste. toggling this updates the proof instantly.</p>
+        </div>
+      </div>
+
+      <button id="detectBtn" class="btn btn--primary" disabled>run detection</button>
+      <p id="detectError" class="error" hidden></p>
+    </section>
+
+    <!-- STEP 3: detections -->
+    <section class="panel" id="detectionsPanel" hidden>
+      <h2 class="panel__title"><span class="eyebrow">03</span> select panel</h2>
+
+      <div class="frame frame--wide">
+        <div class="frame__corners"></div>
+        <img id="detectPreview" class="frame__img" alt="Detected billboards" />
+      </div>
+
+      <div class="spec">
+        <label for="boxSelect">detection to replace</label>
+        <select id="boxSelect" class="select"></select>
+        <p class="spec__note spec__note--flush">the proof below updates automatically when you change this.</p>
+      </div>
+
+      <p id="compositeError" class="error" hidden></p>
+    </section>
+
+    <!-- STEP 4: result -->
+    <section class="panel" id="resultPanel" hidden>
+      <h2 class="panel__title"><span class="eyebrow">04</span> proof</h2>
+
+      <div class="result-row">
+        <div class="frame">
+          <div class="frame__corners"></div>
+          <span class="frame__label frame__label--float">detection · warp shape</span>
+          <img id="resultPreview" class="frame__img" alt="Detected region and warp shape" />
+        </div>
+
+        <div class="frame frame--stamped">
+          <div class="frame__corners"></div>
+          <span class="frame__label frame__label--float">final composite</span>
+          <img id="resultFinal" class="frame__img" alt="Final composited output" />
+          <div class="stamp">PROOF</div>
+        </div>
+      </div>
+
+      <p id="fallbackNote" class="note" hidden>
+        couldn't find a clean 4-sided shape for this panel — used a straight rectangle instead.
+      </p>
+
+      <a id="downloadBtn" class="btn btn--primary" download="billboard_replaced.png">download proof</a>
+    </section>
+
+  </div>
+
+  <footer class="ticket__foot">
+    <span>space swap — panel detection &amp; creative insertion</span>
+    <span id="loadingIndicator" class="loading" hidden>working…</span>
+  </footer>
+
+</div>
+
+<script src="/static/script.js"></script>
+</body>
+</html>

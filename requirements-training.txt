@@ -1,0 +1,29 @@
+# Billboard Ad Replacement — training pipeline dependencies
+# Used for: 1_prepare_dataset.py, 2_train_model.py, 3_evaluate_model.py
+# Run these locally / on a GPU machine, NOT on Render.
+# Target: Python 3.13 (Windows/Linux/macOS)
+
+# --- PyTorch (install this FIRST, separately, with the correct CUDA build) ---
+# Do NOT just pip install torch from this file — the default PyPI wheel on
+# Windows/macOS is CPU-only. Instead run the command for your CUDA version
+# from: https://pytorch.org/get-started/locally/
+#
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# Then verify GPU is detected:
+#   python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+
+# --- Core detection framework ---
+ultralytics>=8.3.0
+
+# --- Image processing ---
+numpy>=1.26.0
+opencv-python>=4.9.0,!=4.13.0.90
+matplotlib>=3.8.0
+
+# --- Dataset config parsing ---
+pyyaml>=6.0
+
+# --- Local quick-look UI (optional, not used in the Render deployment) ---
+streamlit>=1.35.0
+pillow>=10.0.0

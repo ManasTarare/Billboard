@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: billboard-ad-replacement
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Optional: if models/billboard_best.pt isn't committed to the repo
+      # (weight files are usually too large/awkward for git), host it
+      # somewhere downloadable (S3, R2, a GitHub Release asset, etc.) and
+      # set MODEL_URL — app.py downloads it automatically on startup.
+      # - key: MODEL_URL
+      #   value: https://your-storage.example.com/billboard_best.pt
+    healthCheckPath: /api/health

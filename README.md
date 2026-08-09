@@ -1,80 +1,83 @@
-# Billboard Ad Replacement — Local Pipeline
+# Billboard Ad Replacement — FastAPI + Render
 
-Four scripts, run in order.
+This replaces the old Streamlit app (`test.py` / `4_test_replace.py`) with a
+FastAPI backend and a plain HTML/JS frontend, deployable on Render as a
+standard web service.
 
-## 0. Setup
+## What changed
+
+| Before | After |
+|---|---|
+| `test.py` / `4_test_replace.py` (Streamlit) | `app.py` (FastAPI) + `static/index.html`, `static/style.css`, `static/script.js` |
+| Deployed on Streamlit Community Cloud | Deployed on Render as a Python web service |
+| `requirements.txt` included `streamlit` | `requirements.txt` is web-only (fastapi/uvicorn); training deps moved to `requirements-training.txt` |
+
+`1_prepare_dataset.py`, `2_train_model.py`, and `3_evaluate_model.py` are
+unchanged — you still run those locally/on a GPU machine to produce
+`models/billboard_best.pt`, same as before.
+
+## Project layout
+
+```
+app.py                     FastAPI app (detection + compositing API, serves the frontend)
+static/
+  index.html                Frontend markup
+  style.css                 Styling
+  script.js                 Upload/detect/composite flow
+models/
+  billboard_best.pt          Trained weights (see "Getting your model onto Render" below)
+requirements.txt            Web service deps (installed by Render)
+requirements-training.txt   Training pipeline deps (install locally, not on Render)
+render.yaml                 Render service definition
+1_prepare_dataset.py
+2_train_model.py
+3_evaluate_model.py
+```
+
+## Running locally
 
 ```bash
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-
-# Install PyTorch with CUDA support FIRST (pick your CUDA version):
-# https://pytorch.org/get-started/locally/
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-
-# Then everything else:
 pip install -r requirements.txt
-
-# Verify GPU is detected:
-python -c "import torch; print(torch.cuda.is_available())"
+uvicorn app:app --reload
 ```
 
-## 1. Prepare the dataset
+Open http://127.0.0.1:8000
 
-Put your Roboflow-exported zip in this folder, then:
+## API
 
-```bash
-python 1_prepare_dataset.py --zip your-dataset.zip
-```
+- `GET /api/health` — `{"status": "ok", "model_loaded": true|false}`
+- `POST /api/detect` — form fields: `scene` (file), `conf` (float). Returns detected boxes + an annotated preview image (base64 PNG).
+- `POST /api/composite` — form fields: `scene` (file), `ad` (file), `x1`, `y1`, `x2`, `y2` (the chosen box), `fit_shape` (bool), `blend_edges` (bool). Returns the composited image + a preview showing the detection box and warp shape (base64 PNGs).
 
-This extracts it into `dataset/{train,valid,test}/{images,labels}` and rewrites
-`dataset/data.yaml` with correct absolute paths. It also validates that every
-image has a matching label file.
+## Deploying on Render
 
-## 2. Train the model
+1. Push this repo to GitHub/GitLab.
+2. In Render: **New +** → **Web Service** → connect the repo. Render will
+   pick up `render.yaml` automatically (or set these manually):
+   - **Build command**: `pip install -r requirements.txt`
+   - **Start command**: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+3. Deploy.
 
-```bash
-python 2_train_model.py --model yolov8m.pt --epochs 150 --batch 16
-```
+### Getting your model onto Render
 
-Adjust `--batch` down (e.g. 8) if you hit CUDA out-of-memory on your GPU.
-Best weights are copied to `models/billboard_best.pt`. Full logs, loss curves,
-and all checkpoints are under `runs/billboard_yolov8m/`.
+`models/billboard_best.pt` is a binary checkpoint, often too large to
+comfortably commit to git. You have two options:
 
-## 3. Evaluate
+- **Commit it anyway** (fine if it's under a couple hundred MB and you're
+  okay with it living in git history) — just make sure it's at
+  `models/billboard_best.pt` in the repo.
+- **Host it externally** (S3, Cloudflare R2, a GitHub Release asset, etc.)
+  and set the `MODEL_URL` environment variable in Render's dashboard.
+  `app.py` downloads it to `models/billboard_best.pt` automatically on
+  startup if the file isn't already present.
 
-```bash
-python 3_evaluate_model.py --split test
-```
+### Notes on Render's free plan
 
-Prints mAP@0.5, mAP@0.5:0.95, precision, recall, F1, and real inference speed
-(ms/image, FPS) measured on your own hardware. Saves a JSON summary plus
-confusion matrix / PR curve plots under `metrics/`.
-
-## 4. Test it — upload a scene + ad, get the composited result
-
-```bash
-streamlit run 4_test_replace.py
-```
-
-Opens a browser UI. Upload a scene photo containing a billboard and a custom
-ad image. It detects the billboard, warps your ad onto it, and shows/downloads
-the result.
-
----
-
-## Known limitation (by design, for now)
-
-The compositing step uses the YOLO detection box directly as the target
-region for the perspective warp. That means:
-
-- **Works well**: billboards that are roughly front-on or mildly angled in
-  the photo.
-- **Looks less natural**: billboards viewed from a steep angle, since a box
-  is axis-aligned and can't capture true skew.
-
-The natural next upgrade is contour-based quad fitting inside the detected
-box (find the actual 4 corners of the billboard surface) instead of using
-the box corners as-is. Worth doing once you confirm detection accuracy is
-solid — no point refining the warp on a model that isn't finding billboards
-reliably yet.
+- Free web services spin down after inactivity and cold-start on the next
+  request — the first detection after idle time will be slower (model
+  reload).
+- CPU-only inference: `requirements.txt` installs the CPU build of
+  `torch`/`torchvision`. Expect slower inference than a local GPU; fine for
+  occasional single-image use, less fine for high traffic.
+- If you need consistent low-latency inference, use a paid instance type
+  with more CPU, or move inference to a GPU-backed host.
